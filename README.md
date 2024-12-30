@@ -1,22 +1,53 @@
-# plsql-to-plpgsql
+[開発者向けREADME](README-dev.md)
 
-## Setup
+plsql-to-plpgsql
+---
+
+Oracle PL/SQL を PostgreSQL PL/pgSQLに変換するツールです。
+
+## 前提条件
+
+システムに以下がインストールされていること。
+
+- Python (3.7以上推奨)
+- pip
+
+## インストール
+
+1. リポジトリのクローン
+
+```sh
+git clone https://github.com/annesmithog/plsql-to-plpgsql.git
+cd plsql-to-plpgsql
+```
+
+2. 仮想環境の設定
 
 ```sh
 python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python run.py
 ```
 
-## Url
-
-http://127.0.0.1:5000 にアクセス
-
-## Test
+3. アクティベート
 
 ```sh
-pytest tests
+# macOS/Linux
+source venv/bin/activate
+
+# Windows
+venv\Scripts\activate
+```
+
+4. 依存関係のインストール
+
+```sh
+pip install -r requirements.txt
+```
+
+5. 実行・アクセス
+
+```sh
+flask run
+# http://127.0.0.1:5000 にアクセス
 ```
 
 ## 基本
