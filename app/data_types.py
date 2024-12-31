@@ -14,7 +14,3 @@ def match_data_type(code: str) -> bool:
     if code in data_types:
         return True
     return None
-
-# def get_data_type(code: str) -> str:
-#     """データ型を変換して返します"""
-#     return data_types[code]
