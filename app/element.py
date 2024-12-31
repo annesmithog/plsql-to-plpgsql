@@ -1,27 +1,34 @@
+import re
 from app.data_types import *
+
+INF = float('inf')
 
 class Element:
     def __init__(self, oracle_code: str):
         self.tokens = []
         self.procedure_names = []
+        self.function_names = []
         self.oracle_code = oracle_code
+        # code を設定
         self.tokenize()
-        # コメント
+        # is_comment を設定
         self.judge_comment()
-        # カテゴリ
+        # category を設定
         self.set_categories()
-        self.set_procedure_categories()
-        self.set_declare_categories()
-        self.set_output_categories()
-        # コード
-        self.remove_slash_after_end()
-        self.remove_from_dual()
+        # 修正
         self.replace_data_types()
+        self.delete_from_dual()
         self.replace_is_to_as()
         self.replace_output()
-        self.replace_if_contains_concat()
-        self.replace_concat_to_comma()
-        self.replace_procedure_end()
+        self.replace_output_concat()
+        self.delete_procedure_name_after_end(True)
+        self.delete_procedure_name_after_end(False)
+        self.replace_slash_after_semicolon_to_empty_text()
+        self.add_plpgsql_after_procedure_end(True)
+        self.add_plpgsql_after_procedure_end(False)
+        self.set_procedure_with_no_arguments(True)
+        self.set_procedure_with_no_arguments(False)
+        self.replace_return_to_returns()
 
     def __repr__(self):
         """チェック用"""
@@ -29,16 +36,14 @@ class Element:
         for token in self.tokens:
             is_comment = str(token['is_comment']).ljust(12)
             category = token['category'].ljust(20)
-            code = token['code'].replace('\n', '[LB]')
-            # code = token['code']
+            code = token['code'].replace('\n', '[LINE BREAK]')
             # スペース, 改行はスルー
             # if not code.strip() == '':
-            rows += f"{is_comment}{category}{code}\n"
+            rows += f"{is_comment}{category}`{code}`\n"
         return rows
 
     def tokenize(self) -> None:
         """Oracle SQL コードをトークンに分割します"""
-        import re
         pattern = r"(--[^\n]*|/\*.*?\*/|\(|\|\||\)|;|/|:=|=|\.|\*|,|\w+|\n|'[^']*'|\s+)"
         matches = re.findall(pattern, self.oracle_code, flags=re.IGNORECASE | re.DOTALL)
         self.tokens = [{
@@ -50,283 +55,278 @@ class Element:
     def judge_comment(self) -> None:
         """各トークンのコメントフラグを設定します"""
         for token in self.tokens:
-            if token['code'].startswith('--'):
-                token['is_comment'] = True
-            elif token['code'].startswith('/*'):
+            if token['code'].startswith(('--', '/*')):
                 token['is_comment'] = True
 
     def set_categories(self) -> None:
         """各トークンのカテゴリを設定します"""
-        keywords = {
-            'SELECT': 'select', 'FROM': 'from', 'WHERE': 'where',
-            'INSERT': 'insert', 'UPDATE': 'update', 'DELETE': 'delete',
-            'CREATE': 'create', 'PROCEDURE': 'procedure', 'IS': 'is',
-            'DECLARE': 'declare', 'BEGIN': 'begin', 'EXCEPTION': 'exception',
-            'END': 'end', 
-        }
+        keywords = [
+            'SELECT', 'FROM', 'INTO', 'WHERE', 'INSERT', 'UPDATE', 'DELETE',
+            'CREATE', 'PROCEDURE', 'IS', 'DECLARE', 'BEGIN', 'EXCEPTION',
+            'END', 'DUAL', 'DBMS_OUTPUT', 'PUT_LINE', 'OR', 'REPLACE', 
+            'VALUES', 'FUNCTION', 'RETURN', 
+        ]
+        before_category = None
+        is_procedure = False
+        is_procedure_name_zone = False
+        is_function = False
+        is_function_name_zone = False
         for token in self.tokens:
             code = token['code']
             if token['is_comment']:
                 token['category'] = 'comment'
-            elif code.upper() in keywords:
-                token['category'] = keywords[token['code'].upper()]
-            elif code == ';':
-                token['category'] = 'semicolon'
-            elif code == '/':
-                token['category'] = 'slash'
-            else:
-                token['category'] = 'identifier'
-
-    def set_procedure_categories(self) -> None:
-        """プロシージャのカテゴリを設定します"""
-        is_create = False
-        is_procedure = False
-        is_procedure_name = False
-        is_argument = False
-        procedure_name = ''
-        for i, token in enumerate(self.tokens):
-            code = token['code']
-            category = token['category']
-            if token['is_comment'] or code == ' ' or code == '\n' or code == ',':
                 continue
-            if category == 'create':
-                is_create = True
-            elif is_create and category == 'procedure':
-                is_create = False
-                is_procedure = True
-                self.tokens[i]['category'] = 'procedure_start'
-                procedure_name = code
-            elif is_procedure and category == 'identifier':
-                if i+1 < len(self.tokens) and self.tokens[i+1]['code'] == '.':
-                    self.tokens[i]['category'] = 'schema'
-                else:
-                    self.tokens[i]['category'] = 'procedure_name'
-                    self.procedure_names.append(code)
+            match code:
+                case ';': token['category'] = 'semicolon'
+                case '/': token['category'] = 'slash'
+                case '||': token['category'] = 'concat'
+                case _:   token['category'] = 'identifier'
+            if code.upper() in keywords:
+                token['category'] = code.lower()
+            if match_data_type(code):
+                token['category'] = 'data_type'
+            for procedure_name in self.procedure_names:
+                if procedure_name == code:
+                    token['category'] = 'procedure_name'
+            for function_name in self.function_names:
+                if function_name == code:
+                    token['category'] = 'function_name'
+
+            if token['category'] == 'identifier':
+                """
+                identifier
+                """
+                if before_category == 'procedure_start' and code.strip() != '' and code != '\n':
+                    if is_procedure_name_zone:
+                        if token['category'] == 'is' or code == '(':
+                            is_procedure_name_zone = False
+                        else:
+                            token['category'] = 'procedure_name'
+                            self.procedure_names.append(code)
+                if before_category == 'function_start' and code.strip() != '' and code != '\n':
+                    if is_function_name_zone:
+                        if token['category'] == 'is' or code == '(':
+                            is_function_name_zone = False
+                        else:
+                            token['category'] = 'function_name'
+                            self.function_names.append(code)
+            else:
+                """
+                identifier以外
+                """
+                if token['category'] == 'procedure':
+                    is_procedure = True
+                    is_procedure_name_zone = True
+                    token['category'] = 'procedure_start'
+                if is_procedure and token['category'] == 'end':
                     is_procedure = False
-                    is_procedure_name = True
-            elif is_procedure_name and code == '(':
-                is_procedure_name = False
-                is_argument = True
-            elif is_argument:
-                if category == 'is' or code == ')':
-                    is_argument = False
-                elif match_data_type(code):
-                    self.tokens[i]['category'] = 'data_type'
-                else:
-                    self.tokens[i]['category'] = 'name'
-            elif procedure_name != '' and category == 'end':
-                self.tokens[i]['category'] = 'procedure_end'
-                procedure_name = ''
+                    token['category'] = 'procedure_end'
+                if token['category'] == 'function':
+                    is_function = True
+                    is_function_name_zone = True
+                    token['category'] = 'function_start'
+                if is_function and token['category'] == 'end':
+                    is_function = False
+                    token['category'] = 'function_end'
+                # 以前のカテゴリを設定
+                before_category = token['category']
 
-    def set_declare_categories(self) -> None:
-        """宣言部のカテゴリを設定します"""
-        is_declare = False
-        is_first_thing = True
-        for i, token in enumerate(self.tokens):
-            code = token['code']
-            category = token['category']
-            if token['is_comment'] or code.strip() == '' or code == ',':
-                continue
-            if category == 'is' or category == 'declare':
-                is_declare = True
-                is_first_thing = True
-            elif code == ';':
-                is_first_thing = True
-            elif is_declare:
-                if category == 'begin':
-                    is_declare = False
-                elif match_data_type(code):
-                    self.tokens[i]['category'] = 'data_type'
-                elif is_first_thing:
-                    self.tokens[i]['category'] = 'name'
-                    is_first_thing = False
-
-    def set_output_categories(self) -> None:
-        """出力部のカテゴリを設定します""" 
-        is_output = False
-        brackets = 0
-        for i, token in enumerate(self.tokens):
-            if token['is_comment']:
-                continue
-            code = token['code']
-            if code == 'DBMS_OUTPUT':
-                is_output = True
-                self.tokens[i]['category'] = 'dbms_output'
-            elif is_output:
-                if code == 'PUT_LINE':
-                    self.tokens[i]['category'] = 'put_line'
-                elif code == '(':
-                    brackets += 1
-                    if brackets == 1:
-                        self.tokens[i]['category'] = 'output_start'
-                elif code == ')':
-                    brackets -= 1
-                    if brackets == 0:
-                        self.tokens[i]['category'] = 'output_end'
-                    is_output = False
-                elif code == '||':
-                    self.tokens[i]['category'] = 'concat'
-
-    def remove_slash_after_end(self) -> None:
-        """スラッシュを削除します"""
-        is_end = False
-        remove_tokens = []
-        for i, token in enumerate(self.tokens):
-            code = token['code']
-            category = token['category']
-            if token['is_comment']:
-                continue
-            elif category == 'end' or category == 'procedure_end':
-                is_end = True
-            elif is_end:
-                if code == '\n':
-                    pass
-                elif category == 'slash':
-                    is_end = False
-                    remove_tokens.append(i)
-                elif category == 'semicolon':
-                    continue
-                elif category == 'identifier':
-                    if code in self.procedure_names or code.strip() == '':
-                        remove_tokens.append(i)
-                else:
-                    is_end = False
-
-        for remove_token_id in sorted(remove_tokens, reverse=True):
-            del self.tokens[remove_token_id]
-
-    def remove_from_dual(self) -> None:
-        """`FROM DUAL`を削除します"""
-        is_from = False
-        is_from_idx = None
-        remove_tokens = []
-        for i, token in enumerate(self.tokens):
-            category = token['category']
-            if category == 'from':
-                is_from = True
-                is_from_idx = i
-            elif is_from and token['code'] == 'DUAL':
-                remove_tokens.append(i)
-                remove_tokens.append(is_from_idx)
-                is_from = False
-                is_from_idx = None
-            elif is_from and category == 'identifier':
-                if token['code'].strip() == '' and i+1 < len(self.tokens) and self.tokens[i+1]['code'] == 'DUAL':
-                    remove_tokens.append(i)
-            else:
-                is_from = False
-                is_from_idx = None
-
-        for remove_token_id in sorted(remove_tokens, reverse=True):
-            del self.tokens[remove_token_id]
+    def delete_tokens(self, remove_indices) -> None:
+        """トークンを削除します"""
+        for remove_index in sorted(remove_indices, reverse=True):
+            del self.tokens[remove_index]
 
     def replace_data_types(self) -> None:
-        """データ型を変換します"""
+        """データ型を置換します"""
+        for token in self.tokens:
+            if token['category'] == 'data_type':
+                token['code'] = data_types[token['code']]
+
+    def delete_from_dual(self) -> None:
+        """`FROM DUAL`を削除します"""
+        remove_indices = []
+        i_start = INF
+        i_end = 0
+        before_category = None
         for i, token in enumerate(self.tokens):
             category = token['category']
-            if category == 'data_type':
-                self.tokens[i]['code'] = data_types[self.tokens[i]['code']]
+            if category == 'comment' or category == 'identifier':
+                continue
+            if category == 'from':
+                i_start = i
+            if before_category == 'from' and category == 'dual':
+                i_end = i
+                for x in range(i_start, i_end + 1):
+                    print(f"`{self.tokens[x]['code']}`")
+                    remove_indices.append(x)
+                i_start = INF
+                i_end = 0
+            before_category = category
+        self.delete_tokens(remove_indices)
 
     def replace_is_to_as(self) -> None:
-        """`IS`を`AS $$`に変換します"""
-        for i, token in enumerate(self.tokens):
-            category = token['category']
-            if category == 'is':
-                self.tokens[i]['code'] = 'AS $$\nDECLARE'
+        """`IS`を`AS $$ DECLARE`に置換します"""
+        for token in self.tokens:
+            if token['category'] == 'is':
+                token['code'] = 'AS $$\nDECLARE'
 
     def replace_output(self) -> None:
-        """出力形式を変換します"""
-        is_dbms_output = False
-        for i, token in enumerate(self.tokens):
+        """出力形式を置換します"""
+        output_step = 0
+        for token in self.tokens:
             category = token['category']
-            code = token['code']
-            if category == 'dbms_output':
-                is_dbms_output = True
-                self.tokens[i]['code'] = 'RAISE'
-            elif is_dbms_output:
-                if code == '.':
-                    self.tokens[i]['code'] = ' '
-                elif category == 'put_line':
-                    is_dbms_output = False
-                    self.tokens[i]['code'] = "NOTICE '%', "
-    
-    def replace_if_contains_concat(self) -> None:
-        """concat要素を含む場合、置換する"""
-        is_in_output = False
-        concat_count = 0
-        i_start = float('inf')
-        i_end = 0
-        remove_tokens = []
-        for i, token in enumerate(self.tokens):
-            category = token['category']
-            if category == 'output_start':
-                is_in_output = True
-                i_start = i
-            elif category == 'output_end':
-                is_in_output = False
-                i_end = i
-                if i_start < i_end:
-                    if 0 < concat_count:
-                        self.tokens[i_start]['code'] = 'CONCAT('
-                        self.tokens[i_end]['code'] = ')'
-                        concat_count = 0
-                        i_start = float('inf')
-                        i_end = 0
-                    else:
-                        remove_tokens.append(i_start)
-                        remove_tokens.append(i_end)
-            elif is_in_output:
-                if category == 'concat':
-                    concat_count += 1
-        
-        for remove_token_id in sorted(remove_tokens, reverse=True):
-            del self.tokens[remove_token_id]
+            if category == 'comment':
+                continue
+            elif category == 'dbms_output':
+                output_step = 1
+            elif output_step == 1 and token['code'] == '.':
+                output_step = 2
+            elif category == 'put_line':
+                output_step = 3
+            else:
+                output_step = 0
+            match output_step:
+                case 1: token['code'] = 'RAISE'
+                case 2: token['code'] = ' '
+                case 3: token['code'] = "NOTICE '%', "
 
-    def replace_concat_to_comma(self) -> None:
-        """`||`を`, `に置換する"""
-        remove_tokens = []
+    def replace_output_concat(self) -> None:
+        """出力で結合演算子を使用している場合、置換して形式を合わせる"""
+        is_output = False
+        bracket_count = 0
+        bracket_start = None
+        concat_indices = []
+        remove_indices = []
         for i, token in enumerate(self.tokens):
             category = token['category']
-            if category == 'concat':
-                self.tokens[i]['code'] = ', '
-                if self.tokens[i-1]['code'].strip() == '':
-                    remove_tokens.append(i-1)
-                if i+1 < len(self.tokens) and self.tokens[i+1]['code'].strip() == '':
-                    remove_tokens.append(i+1)
+            match category:
+                case 'comment': continue
+                case 'put_line': is_output = True
+                case 'procedure_end': is_output = False
+                case 'concat': concat_indices.append(i)
+            if is_output:
+                code = token['code']
+                match code:
+                    case '(':
+                        if bracket_count == 0:
+                            bracket_start = i
+                        bracket_count += 1
+                    case ')':
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            if len(concat_indices) > 0:
+                                self.tokens[bracket_start]['code'] = 'CONCAT('
+                                for concat_index in concat_indices:
+                                    self.tokens[concat_index]['code'] = ','
+                                    if self.tokens[concat_index - 1]['code'].strip() == '':
+                                        self.tokens[concat_index - 1]['code'] = ''
+                            else:
+                                self.tokens[bracket_start]['code'] = ''
+                                self.tokens[i]['code'] = ''
+                            bracket_count = 0
+                            bracket_start = None
+                            concat_indices = []
+                            is_output = False
+            self.delete_tokens(remove_indices)
 
-        for remove_token_id in sorted(remove_tokens, reverse=True):
-            del self.tokens[remove_token_id]
-
-    def replace_procedure_end(self) -> None:
-        is_procedure_start = False
-        is_procedure_name = False
-        is_procedure_end = False
-        is_semicolon = False
-        procedure_name = ''
-        remove_tokens = []
+    def delete_procedure_name_after_end(self, is_procedure: bool) -> None:
+        """END直後のプロシージャ名を削除します"""
+        if is_procedure:
+            name = 'procedure_name'
+            end = 'procedure_end'
+        else:
+            name = 'function_name'
+            end = 'function_end'
+        remove_indices = []
+        before_category = ''
         for i, token in enumerate(self.tokens):
-            code = token['code']
             category = token['category']
-            if category == 'procedure_start':
-                is_procedure_start = True
-            elif is_procedure_start and category == 'procedure_name':
-                is_procedure_start = False
-                is_procedure_name = True
-                procedure_name = code
-            elif is_procedure_name and category == 'procedure_end':
-                is_procedure_name = False
-                is_procedure_end = True
-            elif is_procedure_end:
-                if code.strip() == '':
-                    remove_tokens.append(i)
-                elif code == procedure_name:
-                    remove_tokens.append(i)
-                    procedure_name = ''
-                elif category == 'semicolon':
-                    is_procedure_end = False
-                    is_semicolon = True
-            elif is_semicolon and code == '\n':
-                self.tokens[i]['code'] += '$$ LANGUAGE plpgsql;\n'
-                is_semicolon = False
-        for remove_token_id in sorted(remove_tokens, reverse=True):
-            del self.tokens[remove_token_id]
+            if category == 'comment' or category == 'identifier':
+                continue
+            elif category == name and before_category == end:
+                if self.tokens[i - 1]['code'].strip() == '':
+                    remove_indices.append(i - 1)
+                remove_indices.append(i)
+            else:
+                before_category = category
+        self.delete_tokens(remove_indices)
+
+    def replace_slash_after_semicolon_to_empty_text(self) -> None:
+        """`;`直後の`/`を空文字に置換します"""
+        before_category = ''
+        for i, token in enumerate(self.tokens):
+            category = token['category']
+            if category == 'comment' or category == 'identifier':
+                continue
+            elif category == 'slash' and before_category == 'semicolon':
+                self.tokens[i]['code'] = ''
+            else:
+                before_category = category
+
+    def add_plpgsql_after_procedure_end(self, is_procedure: bool) -> None:
+        """procedure_end直後に言語文言を追加します"""
+        step = 0 # 1: ***_end, 2: semicolon, 
+        if is_procedure:
+            end = 'procedure_end'
+        else:
+            end = 'function_end'
+
+        for token in self.tokens:
+            category = token['category']
+            if category == 'comment':
+                continue
+            elif category == 'identifier':
+                if token['code'] == '\n' and step == 2:
+                    token['code'] += '$$ LANGUAGE plpgsql;'
+                    step = 0
+            elif category == end:
+                step = 1
+            elif category == 'semicolon' and step == 1:
+                step = 2
+            else:
+                step = 0
+
+    def set_procedure_with_no_arguments(self, is_procedure: bool) -> None:
+        """引数を持たないプロシージャに括弧を追加します"""
+        if is_procedure:
+            start = 'procedure_start'
+            name = 'procedure_name'
+        else:
+            start = 'function_start'
+            name = 'function_name'
+        step = 0
+        procedure_name_index = INF
+        bracket_start_count = 0
+        for i, token in enumerate(self.tokens):
+            category = token['category']
+            if category == 'comment':
+                continue
+            elif step == 0 and category == start:
+                step = 1
+            elif step == 1 and category == name:
+                step = 2
+                procedure_name_index = i
+            elif step == 2:
+                if token['code'] == '(':
+                    bracket_start_count += 1
+                if category == 'is':
+                    if bracket_start_count == 0:
+                        self.tokens[procedure_name_index + 1]['code'] = '() '
+                    bracket_start_count = 0
+                    procedure_name_index = INF
+            elif category == 'identifier':
+                continue
+            else:
+                step = 0
+
+    def replace_return_to_returns(self) -> None:
+        """function宣言内の`RETURN`を`RETURNS`に置換します"""
+        is_function = False
+        for token in self.tokens:
+            category = token['category']
+            match category:
+                case 'function_start': is_function = True
+                case 'is': is_function = False
+                case 'return':
+                    if is_function:
+                        token['code'] = 'RETURNS';

@@ -1,0 +1,9 @@
+CREATE OR REPLACE FUNCTION 
+get_zero RETURN NUMBER IS
+BEGIN
+	RETURN 0;
+END get_zero;
+/
+
+SELECT get_zero()
+FROM DUAL;

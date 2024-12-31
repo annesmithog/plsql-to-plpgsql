@@ -6,3 +6,5 @@ BEGIN
     RAISE NOTICE '%', CONCAT(msg1, ' ', name);
 END;
 $$ LANGUAGE plpgsql;
+
+CALL procedure1('World');

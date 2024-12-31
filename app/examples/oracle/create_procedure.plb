@@ -5,3 +5,5 @@ BEGIN
     DBMS_OUTPUT.PUT_LINE(msg1 || ' ' || name);
 END procedure1;
 /
+
+CALL procedure1('World');

@@ -1,0 +1,10 @@
+CREATE OR REPLACE FUNCTION 
+get_zero() RETURNS NUMERIC AS $$
+DECLARE
+BEGIN
+	RETURN 0;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT get_zero()
+;
