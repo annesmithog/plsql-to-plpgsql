@@ -4,6 +4,7 @@ plsql-to-plpgsql
 ---
 
 Oracle PL/SQL を PostgreSQL PL/pgSQLに変換するツールです。
+可能な範囲のみ変換を行っていますので、参考程度に利用してください。
 
 ## 前提条件
 
@@ -53,6 +54,7 @@ flask run
 ![howtouse-plsql-to-plpgsql](https://github.com/user-attachments/assets/767d8ec1-c5b2-4b21-a782-c2540193c17e)
 
 
+<!-- 
 ## 基本
 
 ### 基本構造 / Basic Structure
@@ -81,4 +83,5 @@ flask run
 - `DECODE(col1, 100, 'A', 'B')` => `CASE col1 WHEN 100 THEN 'A' ELSE 'B' END`
 - `EXCEPTION WHEN DUP_VAL_ON_INDEX` => `EXCEPTION WHEN UNIQUE_VIOLATION`
 - `EXCEPTION WHEN ZERO_DIVIDE` => `EXCEPTION WHEN DIVISION_BY_ZERO`
-- `DBMS_OUTPUT.PUT_LINE('output_text');` => `RAISE NOTICE '%', 'output_text';`
+- `DBMS_OUTPUT.PUT_LINE('output_text');` => `RAISE NOTICE '%', 'output_text';` 
+-->
