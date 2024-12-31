@@ -1,5 +1,6 @@
 import re
 from app.data_types import *
+from app.exception_types import *
 
 INF = float('inf')
 
@@ -17,18 +18,20 @@ class Element:
         self.set_categories()
         # 修正
         self.replace_data_types()
+        self.replace_exceptions()
         self.delete_from_dual()
         self.replace_is_to_as()
         self.replace_output()
         self.replace_output_concat()
-        self.delete_procedure_name_after_end(True)
-        self.delete_procedure_name_after_end(False)
+        self.delete_procedure_name_after_end(is_procedure=True)
+        self.delete_procedure_name_after_end(is_procedure=False)
         self.replace_slash_after_semicolon_to_empty_text()
-        self.add_plpgsql_after_procedure_end(True)
-        self.add_plpgsql_after_procedure_end(False)
-        self.set_procedure_with_no_arguments(True)
-        self.set_procedure_with_no_arguments(False)
+        self.add_plpgsql_after_procedure_end(is_procedure=True)
+        self.add_plpgsql_after_procedure_end(is_procedure=False)
+        self.set_procedure_with_no_arguments(is_procedure=True)
+        self.set_procedure_with_no_arguments(is_procedure=False)
         self.replace_return_to_returns()
+        self.replace_systimestamp()
 
     def __repr__(self):
         """チェック用"""
@@ -85,6 +88,8 @@ class Element:
                 token['category'] = code.lower()
             if match_data_type(code):
                 token['category'] = 'data_type'
+            if match_exception_type(code):
+                token['category'] = 'exception_type'
             for procedure_name in self.procedure_names:
                 if procedure_name == code:
                     token['category'] = 'procedure_name'
@@ -142,6 +147,13 @@ class Element:
             if token['category'] == 'data_type':
                 token['code'] = data_types[token['code']]
 
+    def replace_exceptions(self) -> None:
+        """例外を置換します"""
+        for token in self.tokens:
+            if token['category'] == 'exception_type':
+                print(token['code'])
+                token['code'] = exception_types[token['code']]
+
     def delete_from_dual(self) -> None:
         """`FROM DUAL`を削除します"""
         remove_indices = []
@@ -157,7 +169,6 @@ class Element:
             if before_category == 'from' and category == 'dual':
                 i_end = i
                 for x in range(i_start, i_end + 1):
-                    print(f"`{self.tokens[x]['code']}`")
                     remove_indices.append(x)
                 i_start = INF
                 i_end = 0
@@ -229,7 +240,7 @@ class Element:
                             is_output = False
             self.delete_tokens(remove_indices)
 
-    def delete_procedure_name_after_end(self, is_procedure: bool) -> None:
+    def delete_procedure_name_after_end(self, *, is_procedure: bool) -> None:
         """END直後のプロシージャ名を削除します"""
         if is_procedure:
             name = 'procedure_name'
@@ -263,7 +274,7 @@ class Element:
             else:
                 before_category = category
 
-    def add_plpgsql_after_procedure_end(self, is_procedure: bool) -> None:
+    def add_plpgsql_after_procedure_end(self, *, is_procedure: bool) -> None:
         """procedure_end直後に言語文言を追加します"""
         step = 0 # 1: ***_end, 2: semicolon, 
         if is_procedure:
@@ -286,7 +297,7 @@ class Element:
             else:
                 step = 0
 
-    def set_procedure_with_no_arguments(self, is_procedure: bool) -> None:
+    def set_procedure_with_no_arguments(self, *, is_procedure: bool) -> None:
         """引数を持たないプロシージャに括弧を追加します"""
         if is_procedure:
             start = 'procedure_start'
@@ -330,3 +341,12 @@ class Element:
                 case 'return':
                     if is_function:
                         token['code'] = 'RETURNS';
+
+    def replace_systimestamp(self) -> None:
+        for token in self.tokens:
+            if token['category'] == 'comment':
+                continue
+            if token['code'].upper() == 'SYSTIMESTAMP':
+                token['code'] = 'current_timestamp'
+                
+            
